@@ -1,0 +1,194 @@
+---
+title: | 
+    | Exploring and Visualising
+    | SARS-CoV-2/COVID-19 Data.
+author: |
+    | Federico Mattiello
+    | Last compiled on `r Sys.setlocale('LC_TIME', 'C'); format(Sys.Date(), '%d %b %Y')`
+output: 
+  github_document:
+    fig_width: 10
+    fig_height: 8
+# always_allow_html: yes
+params:
+  time_series_path: ./csse_covid_19_data/csse_covid_19_time_series/
+  daily_reports_path: ./csse_covid_19_data/csse_covid_19_daily_reports/
+  RNGseed: 20190910
+---
+
+
+
+## Data source
+
+John Hopkins University
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      cache = FALSE,
+                      autodep = TRUE,
+                      message = FALSE,
+                      warning = FALSE,
+                      tidy.opts = list(width.cutoff = 90))
+
+## load necessary packages
+library(knitr)
+library(kableExtra)
+library(rms)
+library(survival)
+library(ggplot2)
+library(survminer)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(magrittr)
+library(readr)
+library(stringr)
+library(forcats)
+library(broom)
+library(purrr)
+
+```
+
+
+## Load data
+
+
+```{r load-data, cache=TRUE}
+### load time-series CONFIRMED CASES
+time_series_cases <- readr::read_csv(file = paste0(params$time_series_path,
+                                             "time_series_19-covid-Confirmed.csv"))
+time_series_cases <- time_series_cases %>% 
+  mutate(state = `Province/State`,
+         country = `Country/Region`,
+         `Province/State` = NULL,
+         `Country/Region` = NULL) %>% 
+  select(-Lat, -Long) %>% 
+  pivot_longer(cols = -one_of("state", "country"),
+               names_to = "date",
+               names_pattern = "(.*/.*/.*)",
+               values_to = "confirmed")
+
+### load time-series DEATHS
+time_series_deaths <- readr::read_csv(file = paste0(params$time_series_path,
+                                             "time_series_19-covid-Deaths.csv"))
+time_series_deaths <- time_series_deaths %>% 
+  mutate(state = `Province/State`,
+         country = `Country/Region`,
+         `Province/State` = NULL,
+         `Country/Region` = NULL) %>% 
+  select(-Lat, -Long) %>% 
+  pivot_longer(cols = -one_of("state", "country"),
+               names_to = "date",
+               names_pattern = "(.*/.*/.*)",
+               values_to = "deaths")
+
+### load time-series RECOVERED
+time_series_recovered <- readr::read_csv(file = paste0(params$time_series_path,
+                                             "time_series_19-covid-Recovered.csv"))
+time_series_recovered <- time_series_recovered %>% 
+  mutate(state = `Province/State`,
+         country = `Country/Region`,
+         `Province/State` = NULL,
+         `Country/Region` = NULL) %>% 
+  select(-Lat, -Long) %>% 
+  pivot_longer(cols = -one_of("state", "country"),
+               names_to = "date",
+               names_pattern = "(.*/.*/.*)",
+               values_to = "recovered")
+
+
+time_series_all <- time_series_cases %>% 
+  full_join(time_series_deaths) %>% 
+  full_join(time_series_recovered) %>% 
+  mutate(date = as.Date(date, format = "%m/%d/%y"),
+         recovery_ratio = round(recovered / confirmed, 5),
+         mortality      = round(deaths    / confirmed, 5)) %>% 
+  filter(country != "Iraq")
+
+
+time_series_all %>% 
+  filter(date == "2020-02-23") %>% 
+  group_by(state) %>% 
+  arrange(desc(confirmed)) %>% View()
+  # arrange(desc(date), .by_group = TRUE) %>% 
+  # slice(1, preserve = TRUE)
+
+time_series_all %>% 
+  filter(date == "2020-02-23") %>% 
+  select(confirmed, deaths, recovered) %>% 
+  summarise(recovery_ratio_tot = sum(recovered) / sum(confirmed),
+            mortality_tot      = sum(deaths) / sum(confirmed))
+
+```
+
+
+
+
+
+```{r preprocess-data}
+### extract variables
+clinical <- colData(master_mae) %>% 
+  as_tibble() %>% 
+  mutate(VAD_ECOG = dplyr::na_if(VAD_ECOG, ""),
+         ECOG_2plus = VAD_ECOG  == "2-3",
+         TMTV_220plus = TR_TMTV >= 220,
+         ECOG_2plus_imp = replace_na(ECOG_2plus, "2-3"),
+         TMTV_220plus_imp = replace_na(TMTV_220plus, TRUE),
+         LYSA_score = case_when(
+           TMTV_220plus     &  ECOG_2plus       ~ "High",
+           xor(TMTV_220plus, ECOG_2plus)        ~ "Int.",
+           !TMTV_220plus    &  !ECOG_2plus      ~ "Low",
+           TRUE                                 ~ NA_character_),
+         LYSA_score_imp = case_when(
+           is.na(TR_TMTV)   &  !ECOG_2plus      ~ "Int.",
+           is.na(TR_TMTV)   &  ECOG_2plus       ~ "High",
+           TMTV_220plus     &  is.na(VAD_ECOG)  ~ "High",
+           !TMTV_220plus    &  is.na(VAD_ECOG)  ~ "Int.",
+           TRUE                                 ~ LYSA_score),
+         LYSA_score = as.factor(LYSA_score) %>% fct_explicit_na("<NA>"),
+         LYSA_score_imp = as.factor(LYSA_score_imp)
+  )# END - mutate
+
+
+# vars_to_cast <- sapply(clinical, 
+#                        FUN = function(x) {
+#                          class(x)[1L] == "labelled"
+#                        }) %>% 
+#   which() %>% 
+#   names() %>% 
+#   syms()
+# 
+# cast_labelled <- function(x) {
+#     class(x) <- class(x)[-1L]
+#     x
+# }# END - function
+# 
+# clinical <- clinical %>% 
+#   mutate_at(.vars =  vars(!!!vars_to_cast),
+#             .funs = ~cast_labelled)
+
+
+### re-cast main outcomes removing the damn labelled class
+class(clinical$USUBJID) <- class(clinical$USUBJID)[-1L]
+class(clinical$VAD_PFSINV_AVAL) <- class(clinical$VAD_PFSINV_AVAL)[-1L]
+class(clinical$VAD_PFSINV_EVENT) <- class(clinical$VAD_PFSINV_EVENT)[-1L]
+
+# clinical %>% 
+#   select(USUBJID,
+#          VAD_PFSINV_AVAL,
+#          VAD_PFSINV_EVENT) %>% 
+#   str()
+
+clinical %>% 
+  dplyr::count(ECOG_2plus, 
+               TMTV_220plus,
+               LYSA_score,
+               LYSA_score_imp) #%>% 
+  # kable(caption = "Table of missing LYSA scores, plus imputed score.") %>% 
+  # kable_styling(latex_options = "striped")
+
+```
+
+
