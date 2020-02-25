@@ -111,7 +111,7 @@ time_series_all <- time_series_cases %>%
 time_series_all %>% 
   filter(date == "2020-02-23") %>% 
   group_by(state) %>% 
-  arrange(desc(confirmed)) %>% View()
+  arrange(desc(confirmed)) # %>% View()
   # arrange(desc(date), .by_group = TRUE) %>% 
   # slice(1, preserve = TRUE)
 
@@ -121,74 +121,60 @@ time_series_all %>%
   summarise(recovery_ratio_tot = sum(recovered) / sum(confirmed),
             mortality_tot      = sum(deaths) / sum(confirmed))
 
-```
-
-
-
-
-
-```{r preprocess-data}
-### extract variables
-clinical <- colData(master_mae) %>% 
-  as_tibble() %>% 
-  mutate(VAD_ECOG = dplyr::na_if(VAD_ECOG, ""),
-         ECOG_2plus = VAD_ECOG  == "2-3",
-         TMTV_220plus = TR_TMTV >= 220,
-         ECOG_2plus_imp = replace_na(ECOG_2plus, "2-3"),
-         TMTV_220plus_imp = replace_na(TMTV_220plus, TRUE),
-         LYSA_score = case_when(
-           TMTV_220plus     &  ECOG_2plus       ~ "High",
-           xor(TMTV_220plus, ECOG_2plus)        ~ "Int.",
-           !TMTV_220plus    &  !ECOG_2plus      ~ "Low",
-           TRUE                                 ~ NA_character_),
-         LYSA_score_imp = case_when(
-           is.na(TR_TMTV)   &  !ECOG_2plus      ~ "Int.",
-           is.na(TR_TMTV)   &  ECOG_2plus       ~ "High",
-           TMTV_220plus     &  is.na(VAD_ECOG)  ~ "High",
-           !TMTV_220plus    &  is.na(VAD_ECOG)  ~ "Int.",
-           TRUE                                 ~ LYSA_score),
-         LYSA_score = as.factor(LYSA_score) %>% fct_explicit_na("<NA>"),
-         LYSA_score_imp = as.factor(LYSA_score_imp)
-  )# END - mutate
-
-
-# vars_to_cast <- sapply(clinical, 
-#                        FUN = function(x) {
-#                          class(x)[1L] == "labelled"
-#                        }) %>% 
-#   which() %>% 
-#   names() %>% 
-#   syms()
-# 
-# cast_labelled <- function(x) {
-#     class(x) <- class(x)[-1L]
-#     x
-# }# END - function
-# 
-# clinical <- clinical %>% 
-#   mutate_at(.vars =  vars(!!!vars_to_cast),
-#             .funs = ~cast_labelled)
-
-
-### re-cast main outcomes removing the damn labelled class
-class(clinical$USUBJID) <- class(clinical$USUBJID)[-1L]
-class(clinical$VAD_PFSINV_AVAL) <- class(clinical$VAD_PFSINV_AVAL)[-1L]
-class(clinical$VAD_PFSINV_EVENT) <- class(clinical$VAD_PFSINV_EVENT)[-1L]
-
-# clinical %>% 
-#   select(USUBJID,
-#          VAD_PFSINV_AVAL,
-#          VAD_PFSINV_EVENT) %>% 
-#   str()
-
-clinical %>% 
-  dplyr::count(ECOG_2plus, 
-               TMTV_220plus,
-               LYSA_score,
-               LYSA_score_imp) #%>% 
-  # kable(caption = "Table of missing LYSA scores, plus imputed score.") %>% 
-  # kable_styling(latex_options = "striped")
+time_series_by_date <- time_series_all %>% 
+  group_by(date) %>% 
+  summarise_at(.vars = vars(confirmed:mortality),
+               .funs = ~sum(., na.rm = TRUE)) %>% 
+  mutate(recovery_ratio = recovered / confirmed,
+         mortality      = deaths    / confirmed)
 
 ```
 
+
+
+
+
+```{r time-evolution}
+time_series_by_date %>% 
+    ggplot(aes(x = date, 
+               y = confirmed)) + 
+  # coord_trans(y = "log") + 
+  geom_line(size = 1, col = "orange") +
+  geom_point(size = 2, col = "orange") +
+  geom_line(aes(x = date, y = deaths),
+            size = 1, col = "red") + 
+  geom_point(aes(x = date, y = deaths),
+            size = 2, 
+            col = "red", 
+            shape = "cross") + 
+  geom_line(aes(x = date, y = recovered),
+            size = 1, 
+            col = "forestgreen") + 
+  geom_point(aes(x = date, y = recovered),
+            size = 2, 
+            col = "forestgreen", 
+            shape = "square") + 
+  ggtitle("Evolution of cases, all countries") +
+  ylab("count")
+
+time_series_by_date %>% 
+    ggplot(aes(x = date, 
+               y = mortality)) + 
+  # coord_trans(y = "log") +
+  geom_line(size = 1, col = "red") +
+  geom_point(size = 2, col = "red") +
+  geom_line(aes(x = date, y = recovery_ratio),
+            size = 1, 
+            col = "forestgreen") + 
+  geom_point(aes(x = date, y = recovery_ratio),
+            size = 2, 
+            col = "forestgreen", 
+            shape = "square") + 
+  geom_hline(yintercept = c(0.005, 0.03), 
+             col = "black", linetype = "dotted",
+             size = 1) + 
+  ggtitle("Mortality and recovery evolution, all countries") +
+  ylab("ratio")
+
+```
 
